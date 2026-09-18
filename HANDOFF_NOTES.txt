@@ -1,0 +1,19 @@
+
+KP2 HANDOFF — what to put into the AI coding tool
+
+FILES:
+- KP2_PARCEL.geojson
+- kp2_EXPORTED.gpkg
+- kp2_satellite.tif  (rename your original georeferenced satellite image to this, or adjust the config)
+- prepare_kp2_buildings.py
+- requirements.txt
+- MASTER_PROMPT.txt
+
+Known AOI:
+77.4909452, 28.4498386, 77.5053057, 28.4653919
+EPSG:4326
+
+Known Microsoft Bing L9 QuadKey:
+123121312
+
+Do NOT download all India tiles.

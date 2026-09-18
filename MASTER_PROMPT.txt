@@ -1,0 +1,93 @@
+
+You are a senior GIS + computer-vision engineer. Build a production-quality Python pipeline for my Greater Noida Knowledge Park-II (KP2) building inventory.
+
+AVAILABLE FILES
+1. KP2_PARCEL.geojson
+2. kp2_EXPORTED.gpkg
+3. Microsoft GlobalML Building Footprints latest dataset (download only the relevant tile(s), never the whole India dataset)
+4. A georeferenced satellite image of KP2 that I will supply separately.
+
+CURRENT AOI
+The existing KP2 file has this extent:
+west=77.4909452
+south=28.4498386
+east=77.5053057
+north=28.4653919
+CRS=EPSG:4326
+
+KNOWN MICROSOFT TILE
+The AOI falls in Bing Maps zoom-level-9 QuadKey:
+123121312
+
+MICROSOFT DATA RULES
+- Use the latest official dataset-links.csv:
+  https://bfppub.blob.core.windows.net/%24web/2026-08-13/dataset-links.csv
+- Filter to Location=India and QuadKey=123121312.
+- Download only the matched .csv.gz file(s).
+- Microsoft distributes the footprints as line-delimited GeoJSON in .csv.gz files. The official documentation says its extraction pipeline is semantic segmentation followed by polygonization, and height estimates (where available) are in meters. Do not treat Microsoft footprints as ground truth.
+- Preserve source fields such as id/geometry/height/confidence when present.
+
+GOAL — PHASE 1 ONLY
+Do NOT estimate floors yet.
+Do NOT use LiDAR yet.
+Do NOT fabricate building names, plots, or floor counts.
+
+Phase 1 goal:
+A) extract all Microsoft footprints inside KP2;
+B) compare them against my existing 575-ish building polygons;
+C) identify likely missing buildings;
+D) produce a clean final 2D GIS layer containing:
+   - existing buildings
+   - newly detected candidate buildings
+   - source tag
+   - Microsoft confidence if available
+   - Microsoft height if available
+   - area_m2
+   - unique building_id
+   - overlap score with existing layer
+   - candidate status
+
+GEOSPATIAL REQUIREMENTS
+- Work in EPSG:4326 for storage, but reproject to a metric CRS (appropriate UTM for Greater Noida) before all area/distance calculations.
+- Repair invalid polygons safely.
+- Deduplicate overlapping footprints.
+- Do not confuse adjacent buildings with one building merely because polygons touch.
+- Use configurable overlap/IoU thresholds and document them.
+- Keep original geometries unchanged in an audit layer.
+- Clip only copies, not originals.
+
+MISSING-BUILDING LOGIC
+For every Microsoft footprint:
+1. find spatially nearby existing footprints;
+2. calculate intersection-over-area / IoU;
+3. if overlap is below the configured threshold, flag as candidate missing;
+4. if it overlaps strongly, treat as matched;
+5. if multiple existing polygons overlap one Microsoft polygon, do not blindly merge—flag for review.
+
+SATELLITE IMAGE USE
+If the satellite image is supplied:
+- use it only to visually validate candidate missing footprints;
+- do not infer exact floor count;
+- do not replace vector geometry unless image evidence clearly supports the change;
+- create a QA report showing candidate IDs over the satellite image.
+
+OUTPUTS
+1. kp2_microsoft_buildings.gpkg
+2. kp2_microsoft_buildings.geojson
+3. kp2_missing_building_candidates.gpkg
+4. kp2_missing_building_candidates.geojson
+5. kp2_final_buildings.gpkg
+6. kp2_final_buildings.geojson
+7. kp2_qa_report.html
+8. kp2_processing_log.txt
+9. a CSV summary with:
+   building_id, source, area_m2, height_m, confidence, matched_existing_id,
+   overlap_ratio, candidate_status
+
+IMPORTANT
+- The current data is only for building detection/footprints.
+- Floor count is a separate later field that I will manually provide.
+- Later, after I provide floors, create 3D extrusion/GLB/3D Tiles from the final footprints.
+- Keep the code modular, Windows-friendly, reproducible, and easy to run from VS Code.
+- Include installation steps and one command to run the complete pipeline.
+- Do not download the whole global or whole-India dataset.

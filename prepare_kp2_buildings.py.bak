@@ -1,0 +1,246 @@
+
+"""
+KP2 Microsoft GlobalML Building Footprints extractor
+
+Input:
+  - KP2_PARCEL.geojson  (your existing 575-building / KP2 extent file)
+  - optionally kp2_EXPORTED.gpkg
+
+What it does:
+  1. Reads the KP2 bounding box from KP2_PARCEL.geojson.
+  2. Computes the Bing Maps L9 QuadKey(s) covering that AOI.
+  3. Downloads Microsoft's CURRENT dataset-links.csv.
+  4. Filters only India + the exact KP2 QuadKey(s).
+  5. Downloads only those .csv.gz tiles.
+  6. Converts GeoJSONL to GeoPackage/GeoJSON.
+  7. Clips to the KP2 bbox.
+  8. Compares Microsoft footprints with your existing GPKG and writes likely
+     missing-building candidates.
+
+No whole-India download is performed.
+"""
+
+from pathlib import Path
+import gzip
+import math
+import shutil
+import subprocess
+import sys
+import requests
+import pandas as pd
+import geopandas as gpd
+from shapely.geometry import shape
+
+DATASET_LINKS = "https://bfppub.blob.core.windows.net/%24web/2026-08-13/dataset-links.csv"
+BASE = Path(__file__).resolve().parent
+PARCEL_FILE = BASE / "KP2_PARCEL.geojson"
+GPKG_FILE = BASE / "kp2_EXPORTED.gpkg"
+
+OUT = BASE / "kp2_output"
+OUT.mkdir(exist_ok=True)
+
+def bbox_to_tile(lon, lat, z=9):
+    lat = max(min(lat, 85.05112878), -85.05112878)
+    n = 2 ** z
+    x = int((lon + 180.0) / 360.0 * n)
+    y = int((1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n)
+    return x, y
+
+def tile_to_quadkey(x, y, z=9):
+    chars = []
+    for i in range(z, 0, -1):
+        digit = 0
+        mask = 1 << (i - 1)
+        if x & mask:
+            digit += 1
+        if y & mask:
+            digit += 2
+        chars.append(str(digit))
+    return "".join(chars)
+
+def bbox_quadkeys(bounds, z=9):
+    west, south, east, north = bounds
+    x1, y1 = bbox_to_tile(west, south, z)
+    x2, y2 = bbox_to_tile(east, north, z)
+    qs = set()
+    for x in range(min(x1, x2), max(x1, x2) + 1):
+        for y in range(min(y1, y2), max(y1, y2) + 1):
+            qs.add(tile_to_quadkey(x, y, z))
+    return sorted(qs)
+
+def download(url, dest):
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    r = requests.get(url, stream=True, timeout=120)
+    r.raise_for_status()
+    with open(dest, "wb") as f:
+        for chunk in r.iter_content(chunk_size=1024 * 1024):
+            if chunk:
+                f.write(chunk)
+
+def normalize_columns(df):
+    rename = {}
+    for c in df.columns:
+        lc = str(c).strip().lower()
+        if lc in {"location", "region", "regionname"}:
+            rename[c] = "Location"
+        elif lc in {"quadkey", "quad_key"}:
+            rename[c] = "QuadKey"
+        elif lc in {"url", "downloadurl", "download_url"}:
+            rename[c] = "Url"
+    return df.rename(columns=rename)
+
+def read_geojsonl_gz(path):
+    rows = []
+    with gzip.open(path, "rt", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            import json
+            rows.append(json.loads(line))
+    if not rows:
+        return gpd.GeoDataFrame(geometry=[], crs="EPSG:4326")
+    df = pd.DataFrame(rows)
+    if "geometry" not in df.columns:
+        raise ValueError(f"No geometry column in {path}")
+    df["geometry"] = df["geometry"].apply(shape)
+    return gpd.GeoDataFrame(df, geometry="geometry", crs="EPSG:4326")
+
+def find_existing_layer(path):
+    layers = gpd.list_layers(path)
+    if len(layers) == 0:
+        raise ValueError("No layer found in GPKG")
+    return layers.iloc[0]["name"]
+
+def overlap_ratio(a, b):
+    try:
+        inter = a.intersection(b).area
+        return 0.0 if a.area == 0 else inter / a.area
+    except Exception:
+        return 0.0
+
+def main():
+    if not PARCEL_FILE.exists():
+        raise FileNotFoundError(f"Missing {PARCEL_FILE}. Put the file beside this script.")
+
+    parcels = gpd.read_file(PARCEL_FILE)
+    if parcels.crs is None:
+        parcels = parcels.set_crs(4326)
+    parcels = parcels.to_crs(4326)
+    bounds = tuple(parcels.total_bounds)
+    qkeys = bbox_quadkeys(bounds, 9)
+
+    print("KP2 bbox:", bounds)
+    print("Bing L9 QuadKey(s):", qkeys)
+
+    # 1) latest link table
+    links_csv = OUT / "dataset-links.csv"
+    print("Downloading latest dataset-links.csv ...")
+    download(DATASET_LINKS, links_csv)
+    links = normalize_columns(pd.read_csv(links_csv))
+    required = {"Location", "QuadKey", "Url"}
+    missing = required - set(links.columns)
+    if missing:
+        raise ValueError(f"dataset-links.csv missing columns {missing}; got {links.columns.tolist()}")
+
+    # 2) exact India + quadkey filter
+    loc = links["Location"].astype(str).str.strip().str.lower()
+    qv = links["QuadKey"].astype(str).str.strip()
+    filtered = links[loc.eq("india") & qv.isin(qkeys)].copy()
+
+    # fallback: search any region name containing india, just in case
+    if filtered.empty:
+        filtered = links[loc.str.contains("india", na=False) & qv.isin(qkeys)].copy()
+
+    filtered.to_csv(OUT / "kp2_tile_links.csv", index=False)
+
+    if filtered.empty:
+        raise RuntimeError(
+            f"No Microsoft tile rows found for India and QuadKey(s) {qkeys}. "
+            "Open kp2_tile_links.csv and inspect the current link table."
+        )
+
+    print("\nMATCHED TILES:")
+    print(filtered[["Location", "QuadKey", "Url"]].to_string(index=False))
+
+    # 3) download the matched tiles only
+    parts = []
+    for i, row in filtered.reset_index(drop=True).iterrows():
+        qk = row["QuadKey"]
+        url = row["Url"]
+        gz_path = OUT / f"India_{qk}_{i}.csv.gz"
+        print(f"\nDownloading {qk} ...")
+        download(url, gz_path)
+        parts.append(read_geojsonl_gz(gz_path))
+
+    ms = gpd.GeoDataFrame(pd.concat(parts, ignore_index=True), crs="EPSG:4326")
+    ms = ms[ms.geometry.notna() & ~ms.geometry.is_empty].copy()
+
+    # 4) clip to KP2 bbox
+    from shapely.geometry import box
+    aoi = box(*bounds)
+    ms = ms[ms.geometry.intersects(aoi)].copy()
+    ms["source"] = "Microsoft GlobalML Building Footprints"
+    ms.to_file(OUT / "kp2_microsoft_buildings.gpkg", layer="microsoft_buildings", driver="GPKG")
+    ms.to_file(OUT / "kp2_microsoft_buildings.geojson", driver="GeoJSON")
+
+    # 5) compare with existing GPKG
+    if GPKG_FILE.exists():
+        layer = find_existing_layer(GPKG_FILE)
+        existing = gpd.read_file(GPKG_FILE, layer=layer).to_crs(4326)
+        existing = existing[existing.geometry.notna() & ~existing.geometry.is_empty].copy()
+
+        # Fix invalid geometries where possible
+        existing["geometry"] = existing.geometry.buffer(0)
+        ms["geometry"] = ms.geometry.buffer(0)
+
+        # spatial candidate search
+        sidx = existing.sindex
+        keep = []
+        overlap_values = []
+
+        for idx, geom in ms.geometry.items():
+            hits = list(sidx.query(geom, predicate="intersects"))
+            max_ratio = 0.0
+            for h in hits:
+                ratio = overlap_ratio(geom, existing.geometry.iloc[h])
+                max_ratio = max(max_ratio, ratio)
+            overlap_values.append(max_ratio)
+            # < 20% overlap means likely separate/missing footprint
+            keep.append(max_ratio < 0.20)
+
+        ms["max_overlap_with_existing"] = overlap_values
+        missing_candidates = ms.loc[keep].copy()
+        missing_candidates["candidate_reason"] = "Microsoft footprint has <20% overlap with existing KP2 footprint layer"
+
+        missing_candidates.to_file(
+            OUT / "kp2_missing_building_candidates.gpkg",
+            layer="missing_candidates",
+            driver="GPKG",
+        )
+        missing_candidates.to_file(OUT / "kp2_missing_building_candidates.geojson", driver="GeoJSON")
+
+        print(f"\nExisting buildings: {len(existing)}")
+        print(f"Microsoft buildings inside AOI: {len(ms)}")
+        print(f"Likely missing candidates: {len(missing_candidates)}")
+    else:
+        print("\nNo kp2_EXPORTED.gpkg found; skipped comparison step.")
+
+    # 6) copy a small handoff file
+    (OUT / "KP2_README.txt").write_text(
+        "KP2 Microsoft footprint extraction complete.\\n"
+        f"AOI bbox: {bounds}\\n"
+        f"L9 QuadKeys: {qkeys}\\n"
+        f"Microsoft footprints: {len(ms)}\\n"
+        "See kp2_missing_building_candidates.geojson for likely missing buildings.\\n",
+        encoding="utf-8",
+    )
+
+    print("\nDONE. Outputs are in:", OUT)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print("\nERROR:", e)
+        sys.exit(1)

@@ -1,0 +1,37 @@
+{
+  "aoi": {
+    "west": 77.4909452,
+    "south": 28.4498386,
+    "east": 77.5053057,
+    "north": 28.4653919,
+    "crs": "EPSG:4326"
+  },
+  "microsoft": {
+    "dataset_links_url": "https://bfppub.blob.core.windows.net/$web/2026-08-13/dataset-links.csv",
+    "location_filter": "India",
+    "l9_quadkey": "123121312",
+    "links_cache_ttl_hours": 24
+  },
+  "inputs": {
+    "parcel_file": "KP2_PARCEL.geojson",
+    "existing_gpkg": "kp2_EXPORTED.gpkg",
+    "satellite_image": null,
+    "search_satellite_extensions": [".tif", ".tiff", ".png", ".jpg", ".jpeg"]
+  },
+  "processing": {
+    "storage_crs": "EPSG:4326",
+    "metric_crs_override": null,
+    "aoi_buffer_deg": 0.001,
+    "min_building_area_m2": 5.0
+  },
+  "matching": {
+    "match_iou": 0.5,
+    "match_ratio_ms": 0.7,
+    "possible_duplicate_iou": 0.3,
+    "possible_duplicate_ratio_ms": 0.55,
+    "near_distance_m": 25.0,
+    "dedup_iou": 0.9,
+    "dedup_area_ratio": 0.95
+  },
+  "note": "Downloads ONLY the India + QuadKey 123121312 tile from the CURRENT Microsoft dataset-links.csv. Original inputs are never overwritten."
+}

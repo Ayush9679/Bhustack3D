@@ -1,0 +1,16 @@
+{
+  "aoi": {
+    "west": 77.4909452,
+    "south": 28.4498386,
+    "east": 77.5053057,
+    "north": 28.4653919,
+    "crs": "EPSG:4326"
+  },
+  "microsoft_l9_quadkey": "123121312",
+  "microsoft_dataset_links": "https://bfppub.blob.core.windows.net/%24web/2026-08-13/dataset-links.csv",
+  "input_files": [
+    "KP2_PARCEL.geojson",
+    "kp2_EXPORTED.gpkg"
+  ],
+  "note": "Download only the India + QuadKey 123121312 tile."
+}
